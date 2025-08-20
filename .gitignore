@@ -1,0 +1,99 @@
+# ROS 2 工作空间相关
+dev_ws/build/
+dev_ws/install/
+dev_ws/log/
+dev_ws/.colcon_cd_root
+
+# C++ 编译产物
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# CMake 生成文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE 相关文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# 依赖目录
+node_modules/
+vendor/
+
+# 环境文件
+.env
+.env.local
+.env.*.local
+
+# 系统文件
+.fuse_hidden*
+.directory
+.Trash-*
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 测试覆盖率报告
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# 调试文件
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# 用户特定文件
+*.user
+*.userosscache
+*.sln.docstates
+
+# 昇腾相关
+*.om
+*.bin
+*.model
+
+# 摄像头相关临时文件
+*.avi
+*.mp4
+*.jpg
+*.png
+*.bmp
+capture_*
+
+# 日志文件
+logs/
+*.log.*
+
+# 配置文件备份
+config/*.bak
+config/*.backup
