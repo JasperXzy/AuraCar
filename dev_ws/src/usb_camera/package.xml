@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>usb_camera</name>
+  <version>0.0.1</version>
+  <description>USB摄像头节点</description>
+  <maintainer email="jasper.zhengyi.xu@gmail.com">JasperXzy</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>libv4l2</depend>
+  <depend>libavcodec-dev</depend>
+  <depend>libavformat-dev</depend>
+  <depend>libswscale-dev</depend>
+  <depend>libavdevice-dev</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
