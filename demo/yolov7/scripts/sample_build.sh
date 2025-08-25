@@ -27,15 +27,14 @@ function main()
 {
   echo "[INFO] Sample preparation"
 
- ret=`find ${ModelPath} -maxdepth 1 -name yolov7x.om 2> /dev/null`
+  ret=`find ${ModelPath} -maxdepth 1 -name yolov7x.om 2> /dev/null`
 
-   if [[ ${ret} ]];then
-      echo "[INFO] The yolov7x.om already exists.start buiding"
-    else
-      echo "[ERROR] yolov7x.om does not exist, please follow the readme to convert the model and place it in the correct position!"
-      return 1
-    fi
-
+  if [[ ${ret} ]];then
+    echo "[INFO] The yolov7x.om already exists.start buiding"
+  else
+    echo "[ERROR] yolov7x.om does not exist, please follow the readme to convert the model and place it in the correct position!"
+    return 1
+  fi
     
   build
   if [ $? -ne 0 ];then
