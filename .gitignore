@@ -81,6 +81,7 @@ coverage/
 *.om
 *.bin
 *.model
+*.onnx
 
 # 摄像头相关临时文件
 *.avi
@@ -97,3 +98,6 @@ logs/
 # 配置文件备份
 config/*.bak
 config/*.backup
+
+# 其他
+docs/
