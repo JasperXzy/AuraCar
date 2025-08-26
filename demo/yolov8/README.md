@@ -1,6 +1,6 @@
 ## 第三方依赖安装
 
-设置环境变量，配置程序编译依赖的头文件、库文件路径，“$HOME/Ascend” 替换为实际的 Ascend CANN Toolkit 安装路径。
+设置环境变量，配置程序编译依赖的头文件、库文件路径，“$HOME/Ascend” 替换为实际的 Ascend CANN Toolkit 安装路径
 
 ```
 export DDK_PATH=$HOME/Ascend/ascend-toolkit/latest
@@ -76,14 +76,7 @@ mkdir -p ${THIRDPART_PATH}
   # 准备文件（如已存在可跳过）
   # yolov8n.onnx 与 aipp.cfg 请根据实际情况准备
 
-  atc \
-    --model=yolov8n.onnx \
-    --framework=5 \
-    --output=yolov8n \
-    --input_format=NCHW \
-    --input_shape="images:1,3,640,640" \
-    --soc_version=Ascend310B1 \
-    --insert_op_conf=aipp.cfg
+  atc --model=yolov8n.onnx --framework=5 --output=yolov8n --input_shape="images:1,3,640,640"  --soc_version=Ascend310B1  --insert_op_conf=aipp.cfg
   ```
 
 - 样例编译
