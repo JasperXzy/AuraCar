@@ -1,7 +1,21 @@
 #!/bin/bash
 ScriptPath="$( cd "$(dirname "$BASH_SOURCE")" ; pwd -P )"
 ModelPath="${ScriptPath}/../model"
+
+export DDK_PATH=${DDK_PATH:-$HOME/Ascend/ascend-toolkit/latest}
+export NPU_HOST_LIB=${NPU_HOST_LIB:-$DDK_PATH/runtime/lib64/stub}
+export THIRDPART_PATH=${THIRDPART_PATH:-${DDK_PATH}/thirdpart}
+export LD_LIBRARY_PATH=${THIRDPART_PATH}/lib:$LD_LIBRARY_PATH
+
 THIRDPART_PATH_DEFAULT=${THIRDPART_PATH:-/usr/local/Ascend/thirdpart/aarch64}
+
+if [ -n "$THIRDPART_PATH" ]; then
+  mkdir -p "${THIRDPART_PATH}"
+  echo "[INFO] Created THIRDPART_PATH directory: ${THIRDPART_PATH}"
+fi
+
+mkdir -p "${THIRDPART_PATH_DEFAULT}"
+echo "[INFO] Created default THIRDPART_PATH directory: ${THIRDPART_PATH_DEFAULT}"
 
 function build()
 {

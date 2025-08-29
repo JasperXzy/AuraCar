@@ -1,7 +1,31 @@
 #!/bin/bash
 ScriptPath="$( cd "$(dirname "$BASH_SOURCE")" ; pwd -P )"
 ModelPath="${ScriptPath}/../model"
+
+# 设置环境变量
+export DDK_PATH=${DDK_PATH:-$HOME/Ascend/ascend-toolkit/latest}
+export NPU_HOST_LIB=${NPU_HOST_LIB:-$DDK_PATH/runtime/lib64/stub}
+export THIRDPART_PATH=${THIRDPART_PATH:-${DDK_PATH}/thirdpart}
+export LD_LIBRARY_PATH=${THIRDPART_PATH}/lib:$LD_LIBRARY_PATH
+
 THIRDPART_PATH_DEFAULT=${THIRDPART_PATH:-/usr/local/Ascend/thirdpart/aarch64}
+
+# 确保THIRDPART_PATH目录存在
+if [ -n "$THIRDPART_PATH" ]; then
+  mkdir -p "${THIRDPART_PATH}"
+  echo "[INFO] Created THIRDPART_PATH directory: ${THIRDPART_PATH}"
+fi
+
+# 确保默认的THIRDPART_PATH目录也存在
+mkdir -p "${THIRDPART_PATH_DEFAULT}"
+echo "[INFO] Created default THIRDPART_PATH directory: ${THIRDPART_PATH_DEFAULT}"
+
+# 显示环境变量信息
+echo "[INFO] Environment variables:"
+echo "  DDK_PATH: ${DDK_PATH}"
+echo "  NPU_HOST_LIB: ${NPU_HOST_LIB}"
+echo "  THIRDPART_PATH: ${THIRDPART_PATH}"
+echo "  LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
 
 function build()
 {
