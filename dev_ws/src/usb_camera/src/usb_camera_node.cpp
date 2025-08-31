@@ -13,6 +13,12 @@ extern "C" {
 #include <libavdevice/avdevice.h>
 }
 
+/**
+ * @brief USB摄像头节点类
+ * 
+ * 使用FFmpeg库从USB摄像头捕获视频并发布为ROS2图像消息
+ * 支持MJPG和YUYV两种像素格式
+ */
 class USBCameraNode : public rclcpp::Node
 {
 public:
@@ -32,18 +38,18 @@ public:
         fps_ = this->get_parameter("fps").as_int();
         pixel_format_ = this->get_parameter("pixel_format").as_string();
         
-        RCLCPP_INFO(this->get_logger(), "USB摄像头节点启动");
-        RCLCPP_INFO(this->get_logger(), "设备路径: %s", device_path_.c_str());
-        RCLCPP_INFO(this->get_logger(), "分辨率: %dx%d", width_, height_);
-        RCLCPP_INFO(this->get_logger(), "帧率: %d fps", fps_);
-        RCLCPP_INFO(this->get_logger(), "像素格式: %s", pixel_format_.c_str());
+        RCLCPP_INFO(this->get_logger(), "USB Camera Node Starting");
+        RCLCPP_INFO(this->get_logger(), "Device Path: %s", device_path_.c_str());
+        RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d", width_, height_);
+        RCLCPP_INFO(this->get_logger(), "Frame Rate: %d fps", fps_);
+        RCLCPP_INFO(this->get_logger(), "Pixel Format: %s", pixel_format_.c_str());
         
         // 创建图像发布器
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", 10);
         
         // 初始化FFmpeg
         if (!initialize_camera()) {
-            RCLCPP_ERROR(this->get_logger(), "摄像头初始化失败");
+            RCLCPP_ERROR(this->get_logger(), "Camera initialization failed");
             return;
         }
         
@@ -53,7 +59,7 @@ public:
             std::bind(&USBCameraNode::capture_and_publish, this)
         );
         
-        RCLCPP_INFO(this->get_logger(), "摄像头初始化成功");
+        RCLCPP_INFO(this->get_logger(), "Camera initialized successfully");
         
         // 初始化帧计数器和时间
         frame_count_ = 0;
@@ -66,6 +72,10 @@ public:
     }
 
 private:
+    /**
+     * @brief 初始化FFmpeg摄像头和编解码器
+     * @return 初始化成功返回true，失败返回false
+     */
     bool initialize_camera()
     {
         // 注册FFmpeg设备
@@ -74,14 +84,14 @@ private:
         // 创建格式上下文
         format_context_ = avformat_alloc_context();
         if (!format_context_) {
-            RCLCPP_ERROR(this->get_logger(), "无法分配格式上下文");
+            RCLCPP_ERROR(this->get_logger(), "Failed to allocate format context");
             return false;
         }
         
         // 设置输入格式
         input_format_ = av_find_input_format("video4linux2");
         if (!input_format_) {
-            RCLCPP_ERROR(this->get_logger(), "无法找到video4linux2输入格式");
+            RCLCPP_ERROR(this->get_logger(), "Failed to find video4linux2 input format");
             return false;
         }
         
@@ -93,7 +103,7 @@ private:
         av_dict_set(&options, "video_size", video_size.c_str(), 0);
         av_dict_set(&options, "framerate", framerate.c_str(), 0);
         
-        // 使用正确的选项名称
+        // 根据配置设置像素格式
         if (pixel_format_ == "yuyv") {
             av_dict_set(&options, "pixel_format", "yuyv422", 0);
         } else {
@@ -105,7 +115,7 @@ private:
         if (ret < 0) {
             char errbuf[AV_ERROR_MAX_STRING_SIZE];
             av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-            RCLCPP_ERROR(this->get_logger(), "无法打开摄像头: %s", errbuf);
+            RCLCPP_ERROR(this->get_logger(), "Failed to open camera: %s", errbuf);
             av_dict_free(&options);
             return false;
         }
@@ -114,7 +124,7 @@ private:
         
         // 查找流信息
         if (avformat_find_stream_info(format_context_, nullptr) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "无法找到流信息");
+            RCLCPP_ERROR(this->get_logger(), "Failed to find stream information");
             return false;
         }
         
@@ -128,36 +138,43 @@ private:
         }
         
         if (video_stream_index_ == -1) {
-            RCLCPP_ERROR(this->get_logger(), "无法找到视频流");
+            RCLCPP_ERROR(this->get_logger(), "Failed to find video stream");
             return false;
         }
         
         // 获取编解码器参数
         codec_params_ = format_context_->streams[video_stream_index_]->codecpar;
         
+        // 打印编解码器信息
+        RCLCPP_INFO(this->get_logger(), "Codec ID: %d", codec_params_->codec_id);
+        RCLCPP_INFO(this->get_logger(), "Pixel Format: %d", codec_params_->format);
+        RCLCPP_INFO(this->get_logger(), "Width: %d, Height: %d", codec_params_->width, codec_params_->height);
+        
         // 查找解码器
         codec_ = avcodec_find_decoder(codec_params_->codec_id);
         if (!codec_) {
-            RCLCPP_ERROR(this->get_logger(), "无法找到解码器");
+            RCLCPP_ERROR(this->get_logger(), "Failed to find decoder");
             return false;
         }
+        
+        RCLCPP_INFO(this->get_logger(), "Found decoder: %s", codec_->name);
         
         // 创建解码器上下文
         codec_context_ = avcodec_alloc_context3(codec_);
         if (!codec_context_) {
-            RCLCPP_ERROR(this->get_logger(), "无法分配解码器上下文");
+            RCLCPP_ERROR(this->get_logger(), "Failed to allocate decoder context");
             return false;
         }
         
         // 将参数复制到解码器上下文
         if (avcodec_parameters_to_context(codec_context_, codec_params_) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "无法复制编解码器参数");
+            RCLCPP_ERROR(this->get_logger(), "Failed to copy codec parameters");
             return false;
         }
         
         // 打开解码器
         if (avcodec_open2(codec_context_, codec_, nullptr) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "无法打开解码器");
+            RCLCPP_ERROR(this->get_logger(), "Failed to open decoder");
             return false;
         }
         
@@ -166,13 +183,16 @@ private:
         packet_ = av_packet_alloc();
         
         if (!frame_ || !packet_) {
-            RCLCPP_ERROR(this->get_logger(), "无法分配帧或数据包");
+            RCLCPP_ERROR(this->get_logger(), "Failed to allocate frame or packet");
             return false;
         }
         
         return true;
     }
     
+    /**
+     * @brief 从摄像头捕获帧并发布为ROS2消息
+     */
     void capture_and_publish()
     {
         if (!format_context_ || !codec_context_) {
@@ -185,7 +205,7 @@ private:
                 // 发送数据包到解码器
                 int ret = avcodec_send_packet(codec_context_, packet_);
                 if (ret < 0) {
-                    RCLCPP_WARN(this->get_logger(), "发送数据包失败");
+                    RCLCPP_WARN(this->get_logger(), "Failed to send packet to decoder");
                     av_packet_unref(packet_);
                     return;
                 }
@@ -201,6 +221,9 @@ private:
         }
     }
     
+    /**
+     * @brief 将FFmpeg帧转换为OpenCV格式并发布为ROS2消息
+     */
     void publish_frame()
     {
         if (!frame_) return;
@@ -210,14 +233,130 @@ private:
         
         // 检查帧数据
         if (frame_->linesize[0] > 0 && frame_->data[0]) {
-            int stride = frame_->linesize[0];
-            int expected_yuyv_stride = width_ * 2; // YUYV格式每个像素2字节
-            
-            RCLCPP_DEBUG(this->get_logger(), "帧信息: linesize=%d, expected_yuyv=%d", stride, expected_yuyv_stride);
-            
-            if (stride >= expected_yuyv_stride) {
-                // 可能是YUYV格式
-                RCLCPP_DEBUG(this->get_logger(), "检测到YUYV格式");
+            // 根据像素格式处理图像
+            if (pixel_format_ == "mjpeg") {
+                // MJPG格式处理
+                RCLCPP_DEBUG(this->get_logger(), "Processing MJPG format image");
+                
+                // 获取帧数据大小
+                int frame_size = frame_->linesize[0];
+                RCLCPP_DEBUG(this->get_logger(), "MJPG frame size: %d bytes", frame_size);
+                
+                // 检查数据是否为空
+                if (frame_size <= 0) {
+                    RCLCPP_WARN(this->get_logger(), "Frame data is empty");
+                    return;
+                }
+                
+                // 检查前几个字节，判断是否为JPEG数据
+                bool is_jpeg = false;
+                if (frame_size >= 2) {
+                    if (frame_->data[0][0] == 0xFF && frame_->data[0][1] == 0xD8) {
+                        is_jpeg = true;
+                        RCLCPP_DEBUG(this->get_logger(), "Detected JPEG header marker");
+                    } else {
+                        RCLCPP_DEBUG(this->get_logger(), "First two bytes: 0x%02X 0x%02X", 
+                                   frame_->data[0][0], frame_->data[0][1]);
+                    }
+                }
+                
+                if (is_jpeg) {
+                    // 查找JPEG结束标记
+                    int jpeg_size = frame_size;
+                    for (int i = 0; i < frame_size - 1; i++) {
+                        if (frame_->data[0][i] == 0xFF && frame_->data[0][i+1] == 0xD9) {
+                            jpeg_size = i + 2; // 包含JPEG结束标记
+                            break;
+                        }
+                    }
+                    
+                    RCLCPP_DEBUG(this->get_logger(), "Detected JPEG size: %d bytes", jpeg_size);
+                    
+                    // 使用imdecode解码JPEG数据
+                    std::vector<uint8_t> jpeg_data(frame_->data[0], frame_->data[0] + jpeg_size);
+                    cv_frame = cv::imdecode(jpeg_data, cv::IMREAD_COLOR);
+                    
+                    if (cv_frame.empty()) {
+                        RCLCPP_WARN(this->get_logger(), "JPEG decoding failed");
+                        return;
+                    }
+                } else {
+                    // 如果不是JPEG格式，可能是FFmpeg已经解码为原始格式
+                    RCLCPP_DEBUG(this->get_logger(), "Attempting to process raw format data");
+                    
+                    // 打印详细的帧信息
+                    RCLCPP_DEBUG(this->get_logger(), "Frame info: linesize[0]=%d, linesize[1]=%d, linesize[2]=%d", 
+                                frame_->linesize[0], frame_->linesize[1], frame_->linesize[2]);
+                    RCLCPP_DEBUG(this->get_logger(), "Frame format: %d", frame_->format);
+                    RCLCPP_DEBUG(this->get_logger(), "Frame width: %d, height: %d", frame_->width, frame_->height);
+                    
+                    // 检查FFmpeg解码器的输出格式
+                    if (frame_->format == AV_PIX_FMT_YUV420P || frame_->format == 13) {
+                        RCLCPP_DEBUG(this->get_logger(), "Detected YUV420P format");
+                        // YUV420P格式，需要从三个平面重建图像
+                        cv::Mat yuv420p(height_ * 3 / 2, width_, CV_8UC1);
+                        
+                        // 复制Y平面
+                        memcpy(yuv420p.data, frame_->data[0], width_ * height_);
+                        // 复制U平面
+                        memcpy(yuv420p.data + width_ * height_, frame_->data[1], width_ * height_ / 4);
+                        // 复制V平面
+                        memcpy(yuv420p.data + width_ * height_ * 5 / 4, frame_->data[2], width_ * height_ / 4);
+                        
+                        // 转换为BGR
+                        cv::cvtColor(yuv420p, cv_frame, cv::COLOR_YUV2BGR_I420);
+                        
+                    } else if (frame_->format == AV_PIX_FMT_YUYV422) {
+                        RCLCPP_DEBUG(this->get_logger(), "Detected YUYV422 format");
+                        cv::Mat temp_frame(height_, width_, CV_8UC2, frame_->data[0], frame_->linesize[0]);
+                        cv::cvtColor(temp_frame, cv_frame, cv::COLOR_YUV2BGR_YUYV);
+                        
+                    } else if (frame_->format == AV_PIX_FMT_RGB24) {
+                        RCLCPP_DEBUG(this->get_logger(), "Detected RGB24 format");
+                        cv::Mat temp_frame(height_, width_, CV_8UC3, frame_->data[0], frame_->linesize[0]);
+                        cv::cvtColor(temp_frame, cv_frame, cv::COLOR_RGB2BGR);
+                        
+                    } else if (frame_->format == AV_PIX_FMT_BGR24) {
+                        RCLCPP_DEBUG(this->get_logger(), "Detected BGR24 format");
+                        cv_frame = cv::Mat(height_, width_, CV_8UC3, frame_->data[0], frame_->linesize[0]);
+                        
+                    } else {
+                        // 尝试根据linesize推断格式
+                        // 对于YUV420P格式，linesize[0]可能不等于width，需要特殊处理
+                        int bytes_per_pixel = 0;
+                        if (frame_->linesize[0] > 0 && width_ > 0 && height_ > 0) {
+                            bytes_per_pixel = frame_->linesize[0] / width_;
+                        }
+                        
+                        RCLCPP_DEBUG(this->get_logger(), "Inferred bytes per pixel: %d (linesize[0]=%d, width=%d, height=%d)", 
+                                   bytes_per_pixel, frame_->linesize[0], width_, height_);
+                        
+                        if (bytes_per_pixel == 1) {
+                            // 单字节格式，可能是灰度图
+                            cv_frame = cv::Mat(height_, width_, CV_8UC1, frame_->data[0], frame_->linesize[0]);
+                            cv::cvtColor(cv_frame, cv_frame, cv::COLOR_GRAY2BGR);
+                        } else if (bytes_per_pixel == 2) {
+                            // 双字节格式，可能是YUYV
+                            cv::Mat temp_frame(height_, width_, CV_8UC2, frame_->data[0], frame_->linesize[0]);
+                            cv::cvtColor(temp_frame, cv_frame, cv::COLOR_YUV2BGR_YUYV);
+                        } else if (bytes_per_pixel == 3) {
+                            // 三字节格式，可能是RGB
+                            cv::Mat temp_frame(height_, width_, CV_8UC3, frame_->data[0], frame_->linesize[0]);
+                            cv::cvtColor(temp_frame, cv_frame, cv::COLOR_RGB2BGR);
+                        } else {
+                            RCLCPP_WARN(this->get_logger(), "Unrecognized format, bytes_per_pixel=%d, frame_format=%d", 
+                                       bytes_per_pixel, frame_->format);
+                            return;
+                        }
+                    }
+                }
+                
+            } else if (pixel_format_ == "yuyv") {
+                // YUYV格式处理
+                RCLCPP_DEBUG(this->get_logger(), "Processing YUYV format image");
+                
+                int stride = frame_->linesize[0];
+                int expected_yuyv_stride = width_ * 2; // YUYV格式每个像素2字节
                 
                 // 创建临时缓冲区，确保数据对齐
                 cv::Mat temp_frame(height_, width_, CV_8UC2);
@@ -231,51 +370,44 @@ private:
                 
                 // 转换为BGR格式
                 cv::cvtColor(temp_frame, cv_frame, cv::COLOR_YUV2BGR_YUYV);
-            } else if (stride == width_) {
-                // 可能是灰度格式或其他单字节格式
-                RCLCPP_DEBUG(this->get_logger(), "检测到单字节格式，尝试MJPG解码");
                 
-                // 尝试作为MJPG解码
-                cv_frame = cv::imdecode(cv::Mat(1, stride * height_, CV_8UC1, frame_->data[0]), cv::IMREAD_COLOR);
+            } else {
+                // 其他格式，尝试自动检测
+                RCLCPP_DEBUG(this->get_logger(), "Auto-detecting format");
                 
-                if (cv_frame.empty()) {
-                    RCLCPP_DEBUG(this->get_logger(), "MJPG解码失败，尝试其他格式");
-                    // 如果MJPG失败，尝试其他可能的格式
+                int stride = frame_->linesize[0];
+                int bytes_per_pixel = stride / width_;
+                
+                if (bytes_per_pixel == 1) {
+                    // 单字节格式，可能是灰度图
                     cv_frame = cv::Mat(height_, width_, CV_8UC1, frame_->data[0], stride);
                     cv::cvtColor(cv_frame, cv_frame, cv::COLOR_GRAY2BGR);
-                }
-            } else {
-                // 其他格式，尝试直接创建Mat
-                RCLCPP_DEBUG(this->get_logger(), "未知格式，尝试直接处理");
-                
-                // 计算每像素字节数
-                int bytes_per_pixel = stride / width_;
-                if (bytes_per_pixel > 0 && bytes_per_pixel <= 4) {
-                    int cv_type = CV_8UC(bytes_per_pixel);
-                    cv_frame = cv::Mat(height_, width_, cv_type, frame_->data[0], stride);
-                    
-                    // 根据类型转换颜色空间
-                    if (bytes_per_pixel == 1) {
-                        cv::cvtColor(cv_frame, cv_frame, cv::COLOR_GRAY2BGR);
-                    } else if (bytes_per_pixel == 2) {
-                        cv::cvtColor(cv_frame, cv_frame, cv::COLOR_YUV2BGR_YUYV);
-                    } else if (bytes_per_pixel == 3) {
-                        cv::cvtColor(cv_frame, cv_frame, cv::COLOR_RGB2BGR);
-                    } else if (bytes_per_pixel == 4) {
-                        cv::cvtColor(cv_frame, cv_frame, cv::COLOR_RGBA2BGR);
-                    }
+                } else if (bytes_per_pixel == 2) {
+                    // 双字节格式，可能是YUYV
+                    cv::Mat temp_frame(height_, width_, CV_8UC2, frame_->data[0], stride);
+                    cv::cvtColor(temp_frame, cv_frame, cv::COLOR_YUV2BGR_YUYV);
+                } else if (bytes_per_pixel == 3) {
+                    // 三字节格式，可能是RGB
+                    cv::Mat temp_frame(height_, width_, CV_8UC3, frame_->data[0], stride);
+                    cv::cvtColor(temp_frame, cv_frame, cv::COLOR_RGB2BGR);
                 } else {
-                    RCLCPP_WARN(this->get_logger(), "无法确定像素格式，bytes_per_pixel=%d", bytes_per_pixel);
+                    RCLCPP_WARN(this->get_logger(), "Unrecognized format, bytes_per_pixel=%d", bytes_per_pixel);
                     return;
                 }
             }
             
             if (cv_frame.empty()) {
-                RCLCPP_WARN(this->get_logger(), "图像转换失败");
+                RCLCPP_WARN(this->get_logger(), "Image conversion failed");
                 return;
             }
+            
+            // 确保图像是彩色的
+            if (cv_frame.channels() == 1) {
+                cv::cvtColor(cv_frame, cv_frame, cv::COLOR_GRAY2BGR);
+            }
+            
         } else {
-            RCLCPP_WARN(this->get_logger(), "帧数据无效");
+            RCLCPP_WARN(this->get_logger(), "Invalid frame data");
             return;
         }
         
@@ -294,14 +426,17 @@ private:
         
         if (frame_count_ % 30 == 0) {  // 每30帧显示一次统计信息
             double actual_fps = frame_count_ / elapsed;
-            RCLCPP_INFO(this->get_logger(), "已发布 %d 帧, 运行时间: %.1f秒, 实际帧率: %.1f fps", 
+            RCLCPP_INFO(this->get_logger(), "Published %d frames, Runtime: %.1f seconds, Actual FPS: %.1f fps", 
                        frame_count_, elapsed, actual_fps);
         }
         
-        RCLCPP_DEBUG(this->get_logger(), "发布图像: %dx%d (帧 #%d)", 
+        RCLCPP_DEBUG(this->get_logger(), "Published image: %dx%d (frame #%d)", 
                      cv_frame.cols, cv_frame.rows, frame_count_);
     }
     
+    /**
+     * @brief 清理FFmpeg资源
+     */
     void cleanup_camera()
     {
         if (packet_) {
@@ -321,30 +456,36 @@ private:
     }
     
     // 成员变量
-    std::string device_path_;
-    int width_;
-    int height_;
-    int fps_;
-    std::string pixel_format_;
+    std::string device_path_;           // 摄像头设备路径
+    int width_;                         // 图像宽度
+    int height_;                        // 图像高度
+    int fps_;                           // 帧率
+    std::string pixel_format_;          // 像素格式 (mjpeg 或 yuyv)
     
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
-    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;       // 图像发布器
+    rclcpp::TimerBase::SharedPtr timer_;                                    // 帧捕获定时器
     
     // 帧计数器和时间统计
-    int frame_count_;
-    rclcpp::Time start_time_;
+    int frame_count_;                   // 已发布的总帧数
+    rclcpp::Time start_time_;           // FPS计算的开始时间
     
-    // FFmpeg相关
-    AVFormatContext* format_context_;
-    AVInputFormat* input_format_;
-    AVCodecParameters* codec_params_;
-    AVCodec* codec_;
-    AVCodecContext* codec_context_;
-    AVFrame* frame_;
-    AVPacket* packet_;
-    int video_stream_index_;
+    // FFmpeg相关变量
+    AVFormatContext* format_context_;   // 输入格式上下文
+    AVInputFormat* input_format_;       // 输入格式 (video4linux2)
+    AVCodecParameters* codec_params_;   // 编解码器参数
+    AVCodec* codec_;                    // 编解码器
+    AVCodecContext* codec_context_;     // 编解码器上下文
+    AVFrame* frame_;                    // 解码后的帧
+    AVPacket* packet_;                  // 读取用的数据包
+    int video_stream_index_;            // 视频流索引
 };
 
+/**
+ * @brief 主函数
+ * @param argc 命令行参数数量
+ * @param argv 命令行参数
+ * @return 退出码
+ */
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
