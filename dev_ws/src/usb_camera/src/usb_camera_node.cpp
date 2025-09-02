@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
 #include <opencv2/opencv.hpp>
@@ -30,6 +31,8 @@ public:
         this->declare_parameter("height", 1080);
         this->declare_parameter("fps", 30);
         this->declare_parameter("pixel_format", "mjpeg");
+        this->declare_parameter("publish_compressed", true);
+        this->declare_parameter("jpeg_quality", 60);
         
         // 获取参数
         device_path_ = this->get_parameter("device_path").as_string();
@@ -37,15 +40,33 @@ public:
         height_ = this->get_parameter("height").as_int();
         fps_ = this->get_parameter("fps").as_int();
         pixel_format_ = this->get_parameter("pixel_format").as_string();
+        publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
+        jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
+        
+        // 参数验证
+        if (jpeg_quality_ < 1 || jpeg_quality_ > 100) {
+            RCLCPP_WARN(this->get_logger(), "Invalid JPEG quality: %d, setting to 60", jpeg_quality_);
+            jpeg_quality_ = 60;
+        }
         
         RCLCPP_INFO(this->get_logger(), "USB Camera Node Starting");
         RCLCPP_INFO(this->get_logger(), "Device Path: %s", device_path_.c_str());
         RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d", width_, height_);
         RCLCPP_INFO(this->get_logger(), "Frame Rate: %d fps", fps_);
         RCLCPP_INFO(this->get_logger(), "Pixel Format: %s", pixel_format_.c_str());
+        RCLCPP_INFO(this->get_logger(), "Publish Compressed: %s", publish_compressed_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
         
         // 创建图像发布器
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", 10);
+        
+        // 根据配置决定是否创建压缩图像发布器
+        if (publish_compressed_) {
+            compressed_image_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_compressed", 10);
+            RCLCPP_INFO(this->get_logger(), "Compressed image publisher created for topic: camera/image_compressed");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Compressed image publishing disabled");
+        }
         
         // 初始化FFmpeg
         if (!initialize_camera()) {
@@ -443,6 +464,31 @@ private:
         // 发布图像
         image_pub_->publish(*ros_image.toImageMsg());
         
+        // 根据配置决定是否发布压缩图像
+        if (publish_compressed_) {
+            // 创建并发布压缩图像 (JPEG格式)
+            auto compressed_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
+            compressed_msg->header.stamp = this->now();
+            compressed_msg->header.frame_id = "camera_link";
+            compressed_msg->format = "jpeg";
+            
+            // 将BGR图像编码为JPEG格式
+            std::vector<uchar> jpeg_buffer;
+            std::vector<int> compression_params;
+            compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+            compression_params.push_back(jpeg_quality_);
+            
+            bool success = cv::imencode(".jpg", cv_frame, jpeg_buffer, compression_params);
+            if (success) {
+                compressed_msg->data = jpeg_buffer;
+                compressed_image_pub_->publish(*compressed_msg);
+                RCLCPP_DEBUG(this->get_logger(), "Published compressed image (JPEG quality: %d, size: %zu bytes)", 
+                            jpeg_quality_, jpeg_buffer.size());
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Failed to encode image to JPEG format");
+            }
+        }
+        
         // 更新帧计数器和显示信息
         frame_count_++;
         auto current_time = this->now();
@@ -485,9 +531,12 @@ private:
     int height_;                        // 图像高度
     int fps_;                           // 帧率
     std::string pixel_format_;          // 像素格式 (mjpeg 或 yuyv)
+    bool publish_compressed_;           // 是否发布压缩图像
+    int jpeg_quality_;                  // JPEG压缩质量 (1-100)
     
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;       // 图像发布器
-    rclcpp::TimerBase::SharedPtr timer_;                                    // 帧捕获定时器
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;                       // 图像发布器
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_image_pub_;  // 压缩图像发布器
+    rclcpp::TimerBase::SharedPtr timer_;                                                    // 帧捕获定时器
     
     // 帧计数器和时间统计
     int frame_count_;                   // 已发布的总帧数

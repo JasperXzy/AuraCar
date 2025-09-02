@@ -12,3 +12,7 @@ usb_camera_node:
     
     # 像素格式 (mjpeg 或 yuyv)
     pixel_format: "mjpeg"
+    
+    # 压缩图像发布
+    publish_compressed: true
+    jpeg_quality: 60
