@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
 #include <opencv2/opencv.hpp>
@@ -34,11 +35,10 @@ public:
         this->declare_parameter("width", 1920);
         this->declare_parameter("height", 1080);
         this->declare_parameter("fps", 30);
-        this->declare_parameter("pixel_format", "mjpeg");
+        this->declare_parameter("publish_compressed", true);
         
         // DVPP优化参数
         this->declare_parameter("enable_dvpp", true);
-        this->declare_parameter("dvpp_output_format", "bgr888");
         this->declare_parameter("enable_hardware_resize", false);
         this->declare_parameter("resize_width", 1920);
         this->declare_parameter("resize_height", 1080);
@@ -48,11 +48,10 @@ public:
         width_ = this->get_parameter("width").as_int();
         height_ = this->get_parameter("height").as_int();
         fps_ = this->get_parameter("fps").as_int();
-        pixel_format_ = this->get_parameter("pixel_format").as_string();
+        publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
         
         // 获取DVPP参数
         enable_dvpp_ = this->get_parameter("enable_dvpp").as_bool();
-        dvpp_output_format_ = this->get_parameter("dvpp_output_format").as_string();
         enable_hardware_resize_ = this->get_parameter("enable_hardware_resize").as_bool();
         resize_width_ = this->get_parameter("resize_width").as_int();
         resize_height_ = this->get_parameter("resize_height").as_int();
@@ -61,13 +60,21 @@ public:
         RCLCPP_INFO(this->get_logger(), "Device Path: %s", device_path_.c_str());
         RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d", width_, height_);
         RCLCPP_INFO(this->get_logger(), "Frame Rate: %d fps", fps_);
-        RCLCPP_INFO(this->get_logger(), "Pixel Format: %s", pixel_format_.c_str());
+        RCLCPP_INFO(this->get_logger(), "Pixel Format: MJPEG");
+        RCLCPP_INFO(this->get_logger(), "Publish Compressed: %s", publish_compressed_ ? "true" : "false");
         RCLCPP_INFO(this->get_logger(), "Enable DVPP: %s", enable_dvpp_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "DVPP Output Format: %s", dvpp_output_format_.c_str());
         RCLCPP_INFO(this->get_logger(), "Hardware Resize: %s", enable_hardware_resize_ ? "true" : "false");
         
         // 创建图像发布器
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", 10);
+        
+        // 根据配置决定是否创建压缩图像发布器
+        if (publish_compressed_) {
+            compressed_image_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_compressed", 10);
+            RCLCPP_INFO(this->get_logger(), "Compressed image publisher created for topic: camera/image_compressed");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Compressed image publishing disabled");
+        }
         
         // 初始化资源
         if (!initialize_resources()) {
@@ -165,13 +172,7 @@ private:
         
         av_dict_set(&options, "video_size", video_size.c_str(), 0);
         av_dict_set(&options, "framerate", framerate.c_str(), 0);
-        
-        // 设置像素格式
-        if (pixel_format_ == "yuyv") {
-            av_dict_set(&options, "pixel_format", "yuyv422", 0);
-        } else {
-            av_dict_set(&options, "pixel_format", "mjpeg", 0);
-        }
+        av_dict_set(&options, "pixel_format", "mjpeg", 0);
         
         // 打开输入流
         int ret = avformat_open_input(&format_context_, device_path_.c_str(), input_format_, &options);
@@ -255,277 +256,115 @@ private:
      */
     void capture_and_publish()
     {
-        if (!format_context_ || !codec_context_) {
+        if (!format_context_ || !packet_) {
+            RCLCPP_ERROR(this->get_logger(), "Format context or packet is null");
             return;
         }
         
-        // 读取帧
-        if (av_read_frame(format_context_, packet_) >= 0) {
-            if (packet_->stream_index == video_stream_index_) {
-                // 发送数据包到解码器
-                int ret = avcodec_send_packet(codec_context_, packet_);
-                if (ret < 0) {
-                    RCLCPP_WARN(this->get_logger(), "Failed to send packet to decoder");
-                    av_packet_unref(packet_);
-                    return;
+        try {
+            // 读取帧
+            int ret = av_read_frame(format_context_, packet_);
+            if (ret >= 0) {
+                if (packet_->stream_index == video_stream_index_) {
+                    // 直接处理MJPEG数据包
+                    process_mjpeg_packet();
                 }
-                
-                // 接收解码后的帧
-                ret = avcodec_receive_frame(codec_context_, frame_);
-                if (ret == 0) {
-                    // 使用DVPP处理图像并发布
-                    process_frame_with_dvpp();
-                }
+                av_packet_unref(packet_);
+            } else if (ret != AVERROR(EAGAIN)) {
+                RCLCPP_WARN(this->get_logger(), "Failed to read frame: %d", ret);
             }
-            av_packet_unref(packet_);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Exception in capture_and_publish: %s", e.what());
         }
     }
     
     /**
-     * @brief 使用DVPP处理帧数据
+     * @brief 处理MJPEG数据包
      */
-    void process_frame_with_dvpp()
+    void process_mjpeg_packet()
     {
-        if (!frame_ || !frame_->data[0]) {
+        if (!packet_ || packet_->size <= 0) {
+            RCLCPP_WARN(this->get_logger(), "No packet data available");
             return;
         }
         
-        cv::Mat cv_frame;
+        RCLCPP_DEBUG(this->get_logger(), "Processing MJPEG packet (size: %d bytes)", packet_->size);
         
-        // 检查FFmpeg解码后的格式
-        int frame_format = frame_->format;
-        // RCLCPP_INFO(this->get_logger(), "Frame format: %d (AV_PIX_FMT_YUV420P=%d), pixel_format: %s", 
-        //            frame_format, AV_PIX_FMT_YUV420P, pixel_format_.c_str());
+        // 获取原始MJPEG数据
+        std::vector<uint8_t> jpeg_data(packet_->data, packet_->data + packet_->size);
         
-        if (!enable_dvpp_) {
-            RCLCPP_ERROR(this->get_logger(), "DVPP is disabled, cannot process frames");
-            return;
+        // 首先发布压缩图像（如果启用）
+        if (publish_compressed_) {
+            auto compressed_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
+            compressed_msg->header.stamp = this->now();
+            compressed_msg->header.frame_id = "camera_link";
+            compressed_msg->format = "jpeg";
+            compressed_msg->data = jpeg_data;
+            compressed_image_pub_->publish(*compressed_msg);
+            
+            RCLCPP_DEBUG(this->get_logger(), "Published compressed MJPEG image (size: %zu bytes)", jpeg_data.size());
         }
         
-        // 使用DVPP硬件加速处理
-        if (pixel_format_ == "mjpeg" && frame_format == 13) {  // 13是YUV420P的实际值
-            // FFmpeg已经将MJPG解码为YUV420P，直接处理YUV数据
-            // RCLCPP_INFO(this->get_logger(), "Processing YUV420P with DVPP");
-            process_yuv420p_with_dvpp(cv_frame);
-        } else if (pixel_format_ == "mjpeg" && frame_format != 13) {
-            // 真正的JPEG数据，使用DVPP解码
-            // RCLCPP_INFO(this->get_logger(), "Processing JPEG with DVPP");
-            process_mjpg_with_dvpp(cv_frame);
-        } else if (pixel_format_ == "yuyv") {
-            // 处理YUYV格式
-            // RCLCPP_INFO(this->get_logger(), "Processing YUYV with DVPP");
-            process_yuyv_with_dvpp(cv_frame);
+        // 使用DVPP硬件解码
+        if (enable_dvpp_) {
+            RCLCPP_DEBUG(this->get_logger(), "Using DVPP hardware decode");
+            process_mjpeg_with_dvpp(jpeg_data);
         } else {
-            // 其他格式，DVPP不支持，直接报错
-            RCLCPP_ERROR(this->get_logger(), "Unsupported pixel format: %s with frame format: %d", 
-                       pixel_format_.c_str(), frame_format);
+            RCLCPP_ERROR(this->get_logger(), "DVPP is disabled but required for hardware acceleration. Please enable DVPP.");
             return;
         }
-        
-        if (cv_frame.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "DVPP image processing failed");
-            return;
-        }
-        
-        // 发布图像
-        publish_image(cv_frame);
     }
     
     /**
-     * @brief 使用DVPP处理MJPG格式图像
+     * @brief 使用DVPP硬件解码MJPEG为YUV420SP
      */
-    void process_mjpg_with_dvpp(cv::Mat& cv_frame)
+    void process_mjpeg_with_dvpp(const std::vector<uint8_t>& jpeg_data)
     {
-        RCLCPP_DEBUG(this->get_logger(), "Processing MJPG with DVPP");
-        
-        // 创建JPEG数据
-        ImageData jpeg_image;
-        jpeg_image.format = PIXEL_FORMAT_U8C1;  // 使用U8C1格式表示JPEG数据
-        jpeg_image.width = width_;
-        jpeg_image.height = height_;
-        jpeg_image.size = frame_->linesize[0];
-        jpeg_image.data = std::shared_ptr<uint8_t>(frame_->data[0], [](uint8_t*) {});  // 移除未使用的参数警告
-        
-        // 使用DVPP硬件解码JPEG
-        ImageData yuv_image;
-        AclLiteError ret = image_process_.JpegD(yuv_image, jpeg_image);
-        if (ret != ACLLITE_OK) {
-            RCLCPP_ERROR(this->get_logger(), "DVPP JPEG decode failed with error: %d", ret);
-            return;
-        }
-        
-        // 如果需要硬件缩放
-        if (enable_hardware_resize_) {
-            ImageData resized_image;
-            ret = image_process_.Resize(resized_image, yuv_image, resize_width_, resize_height_);
+        try {
+            RCLCPP_DEBUG(this->get_logger(), "Starting DVPP JPEG decode with AclLite (size: %zu bytes)", jpeg_data.size());
+            
+            // 创建输入JPEG图像数据结构
+            ImageData jpeg_image;
+            jpeg_image.format = PIXEL_FORMAT_U8C1;  // 使用U8C1格式表示JPEG数据
+            jpeg_image.width = width_;
+            jpeg_image.height = height_;
+            jpeg_image.size = jpeg_data.size();
+            jpeg_image.data = std::shared_ptr<uint8_t>(const_cast<uint8_t*>(jpeg_data.data()), [](uint8_t*) {});
+            
+            // 使用DVPP硬件解码JPEG
+            ImageData yuv_image;
+            AclLiteError ret = image_process_.JpegD(yuv_image, jpeg_image);
             if (ret != ACLLITE_OK) {
-                RCLCPP_ERROR(this->get_logger(), "DVPP resize failed with error: %d", ret);
+                RCLCPP_ERROR(this->get_logger(), "DVPP JPEG decode failed with error: %d", ret);
                 return;
             }
-            yuv_image = resized_image;
-        }
-        
-        // 转换为OpenCV格式
-        convert_yuv_to_opencv(yuv_image, cv_frame);
-    }
-    
-    /**
-     * @brief 使用DVPP处理YUYV格式图像
-     */
-    void process_yuyv_with_dvpp(cv::Mat& cv_frame)
-    {
-        RCLCPP_DEBUG(this->get_logger(), "Processing YUYV with DVPP");
-        
-        // 创建YUYV数据
-        ImageData yuyv_image;
-        yuyv_image.format = PIXEL_FORMAT_YUV_SEMIPLANAR_422;
-        yuyv_image.width = width_;
-        yuyv_image.height = height_;
-        yuyv_image.size = frame_->linesize[0] * height_;
-        yuyv_image.data = std::shared_ptr<uint8_t>(frame_->data[0], [](uint8_t*) {});  // 移除未使用的参数警告
-        
-        // 如果需要硬件缩放
-        if (enable_hardware_resize_) {
-            ImageData resized_image;
-            AclLiteError ret = image_process_.Resize(resized_image, yuyv_image, resize_width_, resize_height_);
-            if (ret != ACLLITE_OK) {
-                RCLCPP_ERROR(this->get_logger(), "DVPP resize failed with error: %d", ret);
-                return;
+            
+            RCLCPP_DEBUG(this->get_logger(), "DVPP JPEG decode completed successfully");
+            
+            // 直接发布YUV420SP格式的数据到image_raw
+            if (yuv_image.data && yuv_image.size > 0) {
+                std::vector<uint8_t> yuv_data(yuv_image.size);
+                memcpy(yuv_data.data(), yuv_image.data.get(), yuv_image.size);
+                publish_yuv420sp_image(yuv_data, yuv_image.width, yuv_image.height);
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Invalid YUV image data from DVPP");
             }
-            yuyv_image = resized_image;
-        }
-        
-        // 转换为OpenCV格式
-        convert_yuv_to_opencv(yuyv_image, cv_frame);
-    }
-    
-    /**
-     * @brief 使用DVPP处理YUV420P格式图像（FFmpeg已解码）
-     */
-    void process_yuv420p_with_dvpp(cv::Mat& cv_frame)
-    {
-        // RCLCPP_INFO(this->get_logger(), "Processing YUV420P with DVPP - Start");
-        
-        // 创建YUV420P数据
-        ImageData yuv_image;
-        yuv_image.format = PIXEL_FORMAT_YUV_SEMIPLANAR_420;
-        yuv_image.width = width_;
-        yuv_image.height = height_;
-        yuv_image.size = width_ * height_ * 3 / 2;  // YUV420P大小
-        
-        // RCLCPP_INFO(this->get_logger(), "YUV420P size: %d, width: %d, height: %d", 
-        //            yuv_image.size, yuv_image.width, yuv_image.height);
-        
-        // 分配内存并复制YUV数据
-        std::shared_ptr<uint8_t> yuv_data(new uint8_t[yuv_image.size], [](uint8_t* p) { delete[] p; });
-        
-        // 复制Y平面
-        int y_size = width_ * height_;
-        memcpy(yuv_data.get(), frame_->data[0], y_size);
-        // RCLCPP_INFO(this->get_logger(), "Copied Y plane: %d bytes", y_size);
-        
-        // 复制U平面
-        int u_size = width_ * height_ / 4;
-        memcpy(yuv_data.get() + y_size, frame_->data[1], u_size);
-        // RCLCPP_INFO(this->get_logger(), "Copied U plane: %d bytes", u_size);
-        
-        // 复制V平面
-        memcpy(yuv_data.get() + y_size + u_size, frame_->data[2], u_size);
-        // RCLCPP_INFO(this->get_logger(), "Copied V plane: %d bytes", u_size);
-        
-        yuv_image.data = yuv_data;
-        
-        // 如果需要硬件缩放
-        if (enable_hardware_resize_) {
-            // RCLCPP_INFO(this->get_logger(), "Applying hardware resize: %dx%d -> %dx%d", 
-            //            width_, height_, resize_width_, resize_height_);
-            ImageData resized_image;
-            AclLiteError ret = image_process_.Resize(resized_image, yuv_image, resize_width_, resize_height_);
-            if (ret != ACLLITE_OK) {
-                RCLCPP_ERROR(this->get_logger(), "DVPP resize failed with error: %d", ret);
-                return;
-            }
-            yuv_image = resized_image;
-            // RCLCPP_INFO(this->get_logger(), "Hardware resize completed");
-        }
-        
-        // 转换为OpenCV格式
-        // RCLCPP_INFO(this->get_logger(), "Converting YUV to OpenCV format");
-        convert_yuv_to_opencv(yuv_image, cv_frame);
-        
-        if (cv_frame.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "convert_yuv_to_opencv failed - cv_frame is empty");
-        } else {
-            // RCLCPP_INFO(this->get_logger(), "convert_yuv_to_opencv succeeded - cv_frame size: %dx%d", 
-            //            cv_frame.cols, cv_frame.rows);
+            
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Exception in DVPP JPEG decode: %s", e.what());
         }
     }
     
     /**
-     * @brief 将YUV图像转换为OpenCV格式
+     * @brief 发布YUV420SP格式的图像
      */
-    void convert_yuv_to_opencv(const ImageData& yuv_image, cv::Mat& cv_frame)
+    void publish_yuv420sp_image(const std::vector<uint8_t>& yuv_data, uint32_t width, uint32_t height)
     {
-        // RCLCPP_INFO(this->get_logger(), "convert_yuv_to_opencv - Start");
-        // RCLCPP_INFO(this->get_logger(), "Input YUV image: width=%d, height=%d, size=%d, format=%d", 
-        //            yuv_image.width, yuv_image.height, yuv_image.size, yuv_image.format);
+        // 创建OpenCV Mat包装YUV420SP数据
+        cv::Mat nv12_frame(height * 3 / 2, width, CV_8UC1, (void*)yuv_data.data());
         
-        if (!yuv_image.data) {
-            RCLCPP_ERROR(this->get_logger(), "convert_yuv_to_opencv failed - yuv_image.data is null");
-            return;
-        }
-        
-        // RCLCPP_INFO(this->get_logger(), "DVPP output format: %s", dvpp_output_format_.c_str());
-        
-        // 根据输出格式要求转换
-        if (dvpp_output_format_ == "bgr888") {
-            // RCLCPP_INFO(this->get_logger(), "Creating BGR image: %dx%d", yuv_image.width, yuv_image.height);
-            
-            // 创建BGR图像
-            cv_frame = cv::Mat(yuv_image.height, yuv_image.width, CV_8UC3);
-            
-            // 这里需要根据具体的YUV格式进行转换
-            // 由于DVPP输出通常是YUV420SP格式，需要转换为BGR
-            cv::Mat yuv_mat(yuv_image.height * 3 / 2, yuv_image.width, CV_8UC1, 
-                           const_cast<uint8_t*>(yuv_image.data.get()));
-            
-            // RCLCPP_INFO(this->get_logger(), "YUV mat created: %dx%d, total size: %d", 
-            //            yuv_mat.rows, yuv_mat.cols, yuv_mat.total() * yuv_mat.elemSize());
-            
-            try {
-                cv::cvtColor(yuv_mat, cv_frame, cv::COLOR_YUV2BGR_NV12);
-                // RCLCPP_INFO(this->get_logger(), "cv::cvtColor succeeded - BGR frame: %dx%d", 
-                //            cv_frame.cols, cv_frame.rows);
-            } catch (const cv::Exception& e) {
-                RCLCPP_ERROR(this->get_logger(), "cv::cvtColor failed with exception: %s", e.what());
-                cv_frame = cv::Mat();  // 清空帧
-            }
-
-        } else {
-            // RCLCPP_INFO(this->get_logger(), "Using direct copy for format: %s", dvpp_output_format_.c_str());
-            
-            // 其他格式
-            cv_frame = cv::Mat(yuv_image.height, yuv_image.width, CV_8UC3);
-            memcpy(cv_frame.data, yuv_image.data.get(), yuv_image.size);
-            // RCLCPP_INFO(this->get_logger(), "Direct copy completed - frame: %dx%d", 
-            //            cv_frame.cols, cv_frame.rows);
-        }
-        
-        if (cv_frame.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "convert_yuv_to_opencv failed - final cv_frame is empty");
-        } else {
-            // RCLCPP_INFO(this->get_logger(), "convert_yuv_to_opencv succeeded - final cv_frame: %dx%d, type: %d", 
-            //            cv_frame.cols, cv_frame.rows, cv_frame.type());
-        }
-    }
-    
-    /**
-     * @brief 发布图像消息
-     */
-    void publish_image(const cv::Mat& cv_frame)
-    {
-        // 创建ROS图像消息
-        auto ros_image = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", cv_frame);
+        // 创建ROS图像消息，使用YUV420SP编码
+        auto ros_image = cv_bridge::CvImage(std_msgs::msg::Header(), "yuv420sp", nv12_frame);
         ros_image.header.stamp = this->now();
         ros_image.header.frame_id = "camera_link";
         
@@ -539,12 +378,12 @@ private:
         
         if (frame_count_ % 30 == 0) {  // 每30帧显示一次统计信息
             double actual_fps = frame_count_ / elapsed;
-            RCLCPP_INFO(this->get_logger(), "Published %d frames, Runtime: %.1f seconds, Actual FPS: %.1f fps, Image size: %dx%d", 
-                       frame_count_, elapsed, actual_fps, cv_frame.cols, cv_frame.rows);
+            RCLCPP_INFO(this->get_logger(), "Published %d frames (%ux%u), Runtime: %.1f seconds, Actual FPS: %.1f fps", 
+                       frame_count_, width, height, elapsed, actual_fps);
         }
         
-        // RCLCPP_DEBUG(this->get_logger(), "Published image: %dx%d (frame #%d)", 
-        //              cv_frame.cols, cv_frame.rows, frame_count_);
+        RCLCPP_DEBUG(this->get_logger(), "Published YUV420SP image: %ux%u (frame #%d)", 
+                     width, height, frame_count_);
     }
     
     /**
@@ -582,18 +421,18 @@ private:
     int width_;                         // 图像宽度
     int height_;                        // 图像高度
     int fps_;                           // 帧率
-    std::string pixel_format_;          // 像素格式 (mjpeg 或 yuyv)
+    bool publish_compressed_;           // 是否发布压缩图像
     
     // DVPP优化参数
     bool enable_dvpp_;                  // 是否启用DVPP
-    std::string dvpp_output_format_;    // DVPP输出格式
     bool enable_hardware_resize_;       // 是否启用硬件缩放
     int resize_width_;                  // 缩放宽度
     int resize_height_;                 // 缩放高度
     
     // ROS2相关
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;  // 图像发布器
-    rclcpp::TimerBase::SharedPtr timer_;                               // 帧捕获定时器
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;                       // 图像发布器
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_image_pub_;  // 压缩图像发布器
+    rclcpp::TimerBase::SharedPtr timer_;                                                    // 帧捕获定时器
     
     // 帧计数器和时间统计
     int frame_count_;                   // 已发布的总帧数
