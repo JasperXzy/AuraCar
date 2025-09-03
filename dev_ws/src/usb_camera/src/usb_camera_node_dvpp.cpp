@@ -37,8 +37,7 @@ public:
         this->declare_parameter("fps", 30);
         this->declare_parameter("publish_compressed", true);
         
-        // DVPP优化参数
-        this->declare_parameter("enable_dvpp", true);
+        // DVPP硬件缩放参数
         this->declare_parameter("enable_hardware_resize", false);
         this->declare_parameter("resize_width", 1920);
         this->declare_parameter("resize_height", 1080);
@@ -51,7 +50,6 @@ public:
         publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
         
         // 获取DVPP参数
-        enable_dvpp_ = this->get_parameter("enable_dvpp").as_bool();
         enable_hardware_resize_ = this->get_parameter("enable_hardware_resize").as_bool();
         resize_width_ = this->get_parameter("resize_width").as_int();
         resize_height_ = this->get_parameter("resize_height").as_int();
@@ -62,7 +60,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "Frame Rate: %d fps", fps_);
         RCLCPP_INFO(this->get_logger(), "Pixel Format: MJPEG");
         RCLCPP_INFO(this->get_logger(), "Publish Compressed: %s", publish_compressed_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "Enable DVPP: %s", enable_dvpp_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "DVPP Acceleration: enabled");
         RCLCPP_INFO(this->get_logger(), "Hardware Resize: %s", enable_hardware_resize_ ? "true" : "false");
         
         // 创建图像发布器
@@ -124,14 +122,12 @@ private:
         RCLCPP_INFO(this->get_logger(), "Run mode: %s", (run_mode_ == ACL_HOST) ? "Host" : "Device");
         
         // 初始化DVPP图像处理
-        if (enable_dvpp_) {
-            ret = image_process_.Init();
-            if (ret != ACLLITE_OK) {
-                RCLCPP_ERROR(this->get_logger(), "DVPP image process initialization failed");
-                return false;
-            }
-            RCLCPP_INFO(this->get_logger(), "DVPP image process initialized successfully");
+        ret = image_process_.Init();
+        if (ret != ACLLITE_OK) {
+            RCLCPP_ERROR(this->get_logger(), "DVPP image process initialization failed");
+            return false;
         }
+        RCLCPP_INFO(this->get_logger(), "DVPP image process initialized successfully");
         
         // 初始化FFmpeg（用于摄像头读取）
         if (!initialize_ffmpeg()) {
@@ -305,14 +301,9 @@ private:
             RCLCPP_DEBUG(this->get_logger(), "Published compressed MJPEG image (size: %zu bytes)", jpeg_data.size());
         }
         
-        // 使用DVPP硬件解码
-        if (enable_dvpp_) {
-            RCLCPP_DEBUG(this->get_logger(), "Using DVPP hardware decode");
-            process_mjpeg_with_dvpp(jpeg_data);
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "DVPP is disabled but required for hardware acceleration. Please enable DVPP.");
-            return;
-        }
+        // 使用DVPP硬件解码（固定启用）
+        RCLCPP_DEBUG(this->get_logger(), "Using DVPP hardware decode");
+        process_mjpeg_with_dvpp(jpeg_data);
     }
     
     /**
@@ -341,13 +332,37 @@ private:
             
             RCLCPP_DEBUG(this->get_logger(), "DVPP JPEG decode completed successfully");
             
-            // 直接发布YUV420SP格式的数据到image_raw
-            if (yuv_image.data && yuv_image.size > 0) {
-                std::vector<uint8_t> yuv_data(yuv_image.size);
-                memcpy(yuv_data.data(), yuv_image.data.get(), yuv_image.size);
-                publish_yuv420sp_image(yuv_data, yuv_image.width, yuv_image.height);
+            // 使用DVPP硬件缩放
+            const bool need_resize = enable_hardware_resize_ &&
+                                     resize_width_ > 0 && resize_height_ > 0 &&
+                                     (static_cast<int>(yuv_image.width) != resize_width_ ||
+                                      static_cast<int>(yuv_image.height) != resize_height_);
+
+            if (need_resize) {
+                ImageData resized_yuv;
+                RCLCPP_DEBUG(this->get_logger(), "DVPP resizing from %ux%u to %dx%d", yuv_image.width, yuv_image.height, resize_width_, resize_height_);
+                ret = image_process_.Resize(resized_yuv, yuv_image, static_cast<uint32_t>(resize_width_), static_cast<uint32_t>(resize_height_));
+                if (ret != ACLLITE_OK) {
+                    RCLCPP_ERROR(this->get_logger(), "DVPP resize failed with error: %d", ret);
+                    return;
+                }
+
+                if (resized_yuv.data && resized_yuv.size > 0) {
+                    std::vector<uint8_t> yuv_data(resized_yuv.size);
+                    memcpy(yuv_data.data(), resized_yuv.data.get(), resized_yuv.size);
+                    publish_yuv420sp_image(yuv_data, resized_yuv.width, resized_yuv.height);
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Invalid resized YUV image data from DVPP");
+                }
             } else {
-                RCLCPP_ERROR(this->get_logger(), "Invalid YUV image data from DVPP");
+                // 直接发布YUV420SP格式的数据到image_raw
+                if (yuv_image.data && yuv_image.size > 0) {
+                    std::vector<uint8_t> yuv_data(yuv_image.size);
+                    memcpy(yuv_data.data(), yuv_image.data.get(), yuv_image.size);
+                    publish_yuv420sp_image(yuv_data, yuv_image.width, yuv_image.height);
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Invalid YUV image data from DVPP");
+                }
             }
             
         } catch (const std::exception& e) {
@@ -413,10 +428,8 @@ private:
             avformat_free_context(format_context_);
         }
         
-        // 清理DVPP资源
-        if (enable_dvpp_) {
-            image_process_.DestroyResource();
-        }
+    // 清理DVPP资源（始终销毁）
+    image_process_.DestroyResource();
         
         // 清理ACL资源
         acl_resource_.Release();
@@ -430,7 +443,6 @@ private:
     bool publish_compressed_;           // 是否发布压缩图像
     
     // DVPP优化参数
-    bool enable_dvpp_;                  // 是否启用DVPP
     bool enable_hardware_resize_;       // 是否启用硬件缩放
     int resize_width_;                  // 缩放宽度
     int resize_height_;                 // 缩放高度
