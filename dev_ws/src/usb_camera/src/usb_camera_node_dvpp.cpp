@@ -363,13 +363,19 @@ private:
         // 创建OpenCV Mat包装YUV420SP数据
         cv::Mat nv12_frame(height * 3 / 2, width, CV_8UC1, (void*)yuv_data.data());
         
-        // 创建ROS图像消息，使用YUV420SP编码
-        auto ros_image = cv_bridge::CvImage(std_msgs::msg::Header(), "yuv420sp", nv12_frame);
-        ros_image.header.stamp = this->now();
-        ros_image.header.frame_id = "camera_link";
+        // 创建ROS图像消息，使用nv12编码
+        auto image_msg = std::make_unique<sensor_msgs::msg::Image>();
+        image_msg->header.stamp = this->now();
+        image_msg->header.frame_id = "camera_link";
+        image_msg->height = height;
+        image_msg->width = width;
+        image_msg->encoding = "nv12";
+        image_msg->is_bigendian = false;
+        image_msg->step = width;
+        image_msg->data.assign(nv12_frame.data, nv12_frame.data + nv12_frame.total() * nv12_frame.elemSize());
         
         // 发布图像
-        image_pub_->publish(*ros_image.toImageMsg());
+        image_pub_->publish(std::move(image_msg));
         
         // 更新帧计数器和显示信息
         frame_count_++;

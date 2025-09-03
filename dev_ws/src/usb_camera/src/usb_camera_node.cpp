@@ -229,7 +229,7 @@ private:
     }
     
     /**
-     * @brief 将FFmpeg帧转换为YUV420SP格式并发布为ROS2消息
+     * @brief 将FFmpeg帧转换为NV12(YUV420SP)格式并发布为ROS2消息
      */
     void publish_frame()
     {
@@ -266,37 +266,43 @@ private:
             return;
         }
         
-        // 将BGR转换为YUV420SP (NV12)格式
-        cv::Mat yuv420sp_frame;
-        cv::cvtColor(bgr_frame, yuv420sp_frame, cv::COLOR_BGR2YUV_I420);
-        
-        // 重新排列为YUV420SP (NV12)格式
-        // YUV420SP格式: Y平面 + UV交错平面
-        int y_size = width_ * height_;
-        int uv_size = y_size / 2;
-        
+        // 将BGR转换为I420并重排为NV12
+        cv::Mat yuv_i420;
+        cv::cvtColor(bgr_frame, yuv_i420, cv::COLOR_BGR2YUV_I420);
+
+        // YUV420SP(NV12): Y平面 + UV交错平面
+        const int y_size = width_ * height_;
+        const int uv_size = y_size / 2;
+
         cv::Mat nv12_frame(height_ * 3 / 2, width_, CV_8UC1);
-        
+
         // 复制Y平面
-        memcpy(nv12_frame.data, yuv420sp_frame.data, y_size);
-        
-        // 重新排列UV平面为交错格式
+        memcpy(nv12_frame.data, yuv_i420.data, y_size);
+
+        // 将I420的U/V平面交错为NV12的UV平面
         uint8_t* uv_plane = nv12_frame.data + y_size;
-        const uint8_t* u_plane = yuv420sp_frame.data + y_size;
-        const uint8_t* v_plane = yuv420sp_frame.data + y_size + uv_size / 2;
-        
+        const uint8_t* u_plane = yuv_i420.data + y_size;
+        const uint8_t* v_plane = yuv_i420.data + y_size + uv_size / 2; // I420中U后接V
+
         for (int i = 0; i < uv_size / 2; i++) {
-            uv_plane[i * 2] = u_plane[i];     // U分量
-            uv_plane[i * 2 + 1] = v_plane[i]; // V分量
+            uv_plane[i * 2] = u_plane[i];       // U
+            uv_plane[i * 2 + 1] = v_plane[i];   // V
         }
-        
-        // 创建ROS图像消息，使用yuv420sp编码
-        auto ros_image = cv_bridge::CvImage(std_msgs::msg::Header(), "yuv420sp", nv12_frame);
-        ros_image.header.stamp = this->now();
-        ros_image.header.frame_id = "camera_link";
-        
+
+        // 手动构造ROS图像消息，显式设置宽高为原始尺寸并使用nv12编码
+        sensor_msgs::msg::Image image_msg;
+        image_msg.header.stamp = this->now();
+        image_msg.header.frame_id = "camera_link";
+        image_msg.height = height_;                 // 正确的可见高度
+        image_msg.width = width_;                   // 正确的宽度
+        image_msg.encoding = "nv12";                // 使用标准编码字符串
+        image_msg.is_bigendian = 0;
+        image_msg.step = width_;                    // 每行字节数（按Y平面宽度）
+        image_msg.data.resize(y_size + uv_size);
+        memcpy(image_msg.data.data(), nv12_frame.data, y_size + uv_size);
+
         // 发布图像
-        image_pub_->publish(*ros_image.toImageMsg());
+        image_pub_->publish(image_msg);
 
         // 更新帧计数器和显示信息
         frame_count_++;
@@ -309,8 +315,8 @@ private:
                        frame_count_, elapsed, actual_fps);
         }
         
-        RCLCPP_DEBUG(this->get_logger(), "Published YUV420SP image: %dx%d (frame #%d)", 
-                     nv12_frame.cols, nv12_frame.rows, frame_count_);
+    RCLCPP_DEBUG(this->get_logger(), "Published NV12 image: %dx%d (frame #%d)", 
+             image_msg.width, image_msg.height, frame_count_);
     }
     
     /**
