@@ -13,8 +13,7 @@ usb_camera_node_dvpp:
     # 压缩图像发布设置
     publish_compressed: true
     
-    # DVPP硬件加速参数
-    enable_dvpp: true                       # 启用DVPP硬件加速
+    # DVPP硬件缩放
     enable_hardware_resize: false           # 是否启用硬件缩放
     resize_width: 1920                      # 缩放后的宽度
     resize_height: 1080                     # 缩放后的高度
