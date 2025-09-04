@@ -1,0 +1,29 @@
+lane_detection:
+  ros__parameters:
+    # 订阅图像话题和编码格式
+    image_topic: "/camera/image_raw"
+    image_encoding: "nv12"                  
+    annotations_topic: "/lane/annotations"
+    model_path: "model/clrnet/clrnet.om"
+
+    use_dvpp: true
+    use_aipp: true
+
+    # AIPP参数
+    device_id: 0
+    input_width: 800
+    input_height: 320
+    pre_resize_height: 512
+
+    # 发布图像注解的QoS设置
+    qos_history: "keep_last"
+    qos_depth: 2
+
+    # 后处理参数
+    S: 72
+    cut_height: 192
+    ori_height: 512
+    confidence_threshold: 0.5
+    nms_thres: 50.0
+    nms_topk: 5
+    horizon_y_px: 400
