@@ -1,11 +1,6 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <!--
-    carla_world_manager：CARLA 世界管理功能包
-    - 提供 world_manager_node 节点，用于连接与管理 CARLA 世界
-    - 依赖 rclpy、std_srvs、std_msgs
-  -->
   <name>carla_world_manager</name>
   <version>0.0.1</version>
   <description>A simple world manager package for Carla</description>

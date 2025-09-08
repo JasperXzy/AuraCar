@@ -1,11 +1,5 @@
 from setuptools import find_packages, setup
 
-# 打包配置（ament_python）：定义 ROS 2 Python 包 carla_world_manager
-# 说明：
-# - packages: 自动查找 carla_world_manager 下的 Python 包
-# - data_files: 安装 package.xml 与资源索引，以便被 ROS 2 发现
-# - entry_points: 注册可执行脚本 world_manager_node
-
 package_name = 'carla_world_manager'
 
 setup(
