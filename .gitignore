@@ -3,6 +3,10 @@ dev_ws/build/
 dev_ws/install/
 dev_ws/log/
 dev_ws/.colcon_cd_root
+carla_ws/build/
+carla_ws/install/
+carla_ws/log/
+carla_ws/.colcon_cd_root
 
 # C++ 编译产物
 *.o
@@ -101,3 +105,4 @@ config/*.backup
 
 # 其他
 docs/
+__pycache__/
