@@ -10,7 +10,7 @@ try:
     import carla
 except ImportError as exc:
     raise SystemExit(
-        "未找到 carla 包，请使用 'pip install carla' 安装，或将 CARLA egg 路径加入环境变量 PYTHONPATH."
+        "carla not found. Please install with 'pip install carla' or set PYTHONPATH to CARLA egg."
     ) from exc
 
 
