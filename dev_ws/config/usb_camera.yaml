@@ -4,8 +4,8 @@ usb_camera_node:
     device_path: "/dev/video0"
     
     # 图像分辨率
-    width: 1920
-    height: 1080
+    width: 1280
+    height: 720
     
     # 帧率
     fps: 30
