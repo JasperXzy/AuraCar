@@ -15,7 +15,7 @@ vehicles:
       height: 720
       fov: 90.0
       fps: 30
-      quality: 90
+      quality: 50
       frame_id: camera_front
 
 
