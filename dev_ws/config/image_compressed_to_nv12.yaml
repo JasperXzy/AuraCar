@@ -1,0 +1,15 @@
+image_compressed_to_nv12_node:
+  ros__parameters:
+    # 话题配置
+    input_topic: "vehicle_ego/front_camera/image_compressed"        # 输入压缩图像话题
+    output_topic: "vehicle_ego/front_camera/image_raw"              # 输出原始图像话题
+    frame_id: "camera_link"                                         # 帧ID
+    
+    # 图像尺寸配置（用于DVPP解码）
+    image_width: 1280                     # 输入图像宽度
+    image_height: 720                     # 输入图像高度
+    
+    # DVPP硬件缩放配置
+    enable_hardware_resize: false         # 是否启用硬件缩放
+    resize_width: 1280                    # 缩放后的宽度
+    resize_height: 720                    # 缩放后的高度
