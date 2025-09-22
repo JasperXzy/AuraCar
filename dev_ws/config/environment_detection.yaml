@@ -1,0 +1,24 @@
+environment_detection:
+  ros__parameters:
+    # 订阅图像话题和编码格式
+    image_topic: "/camera/image_raw"
+    image_encoding: "nv12"                  
+    annotations_topic: "/environment/annotations"
+    segmentation_topic: "/environment/segmentation"
+    model_path: "model/yolo11n-seg.om"
+
+    use_dvpp: true
+    use_aipp: true
+
+    # AIPP参数
+    device_id: 0
+    input_width: 640
+    input_height: 640
+
+    # 发布图像注解和分割结果的QoS设置
+    qos_history: "keep_last"
+    qos_depth: 2
+
+    # 推理参数
+    confidence_threshold: 0.35
+    nms_threshold: 0.45
